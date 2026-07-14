@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Literal
 
 import httpx
@@ -14,14 +16,25 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("zerobyte_mcp")
 
-mcp = FastMCP("zerobyte", host="0.0.0.0", port=8000)
-
 BASE_URL = os.environ["ZEROBYTE_URL"]
 TOKEN = os.environ["ZEROBYTE_API_TOKEN"]
 
 http_client = httpx.AsyncClient(
     base_url=BASE_URL, headers={"x-api-key": TOKEN}, timeout=30.0
 )
+
+
+@asynccontextmanager
+async def lifespan(server: FastMCP) -> AsyncIterator[None]:
+    logger.info("Starting zerobyte-mcp server")
+    try:
+        yield
+    finally:
+        await http_client.aclose()
+        logger.info("Shut down zerobyte-mcp server")
+
+
+mcp = FastMCP("zerobyte", host="0.0.0.0", port=8000, lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # Exceptions
