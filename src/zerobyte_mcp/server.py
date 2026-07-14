@@ -423,5 +423,25 @@ async def browse_filesystem(
     return json.dumps(data)
 
 
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    from starlette.responses import JSONResponse
+
+    try:
+        r = await http_client.get("/api/v1/system/info")
+        r.raise_for_status()
+        return JSONResponse({"status": "ok"})
+    except Exception:
+        return JSONResponse(
+            {"status": "unhealthy", "reason": "zerobyte_unreachable"},
+            status_code=503,
+        )
+
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
