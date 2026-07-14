@@ -1,5 +1,8 @@
+import functools
 import json
+import logging
 import os
+import re
 from typing import Literal
 
 import httpx
@@ -7,6 +10,9 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("zerobyte_mcp")
 
 mcp = FastMCP("zerobyte", host="0.0.0.0", port=8000)
 
@@ -17,18 +23,135 @@ http_client = httpx.AsyncClient(
     base_url=BASE_URL, headers={"x-api-key": TOKEN}, timeout=30.0
 )
 
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class ZerobyteError(Exception):
+    """Base error for Zerobyte API issues."""
+
+    def __init__(self, message: str, status_code: int | None = None):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(message)
+
+
+class ZerobyteNotFoundError(ZerobyteError):
+    pass
+
+
+class ZerobyteAuthError(ZerobyteError):
+    pass
+
+
+class ZerobyteServerError(ZerobyteError):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+VALID_SHORT_ID = re.compile(r"^[a-zA-Z0-9]{4,16}$")
+
+
+def validate_id(value: str, name: str = "resource_id") -> None:
+    if not VALID_SHORT_ID.match(value):
+        raise ZerobyteError(f"Invalid {name}: '{value}' — expected alphanumeric ID (4-16 chars)")
+
+
+def validate_path(value: str | None) -> None:
+    if value is not None and ".." in value.split("/"):
+        raise ZerobyteError(f"Invalid path: '{value}' — path traversal not allowed")
+
+
+# ---------------------------------------------------------------------------
+# Error handling decorator
+# ---------------------------------------------------------------------------
+
+
+def handle_errors(func):
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except ZerobyteNotFoundError as e:
+            logger.warning("Not found: %s", e.message)
+            return json.dumps({"error": e.message, "code": "not_found"})
+        except ZerobyteAuthError as e:
+            logger.error("Auth error: %s", e.message)
+            return json.dumps({"error": e.message, "code": "auth_error"})
+        except ZerobyteServerError as e:
+            logger.error("Server error: %s", e.message)
+            return json.dumps({"error": e.message, "code": "server_error"})
+        except ZerobyteError as e:
+            logger.error("API error: %s", e.message)
+            return json.dumps({"error": e.message, "code": "api_error"})
+        except httpx.HTTPStatusError as e:
+            logger.error("Unexpected HTTP error: %s", e)
+            return json.dumps({"error": f"Unexpected error ({e.response.status_code})", "code": "unexpected"})
+        except Exception:
+            logger.exception("Unhandled error in tool")
+            return json.dumps({"error": "Internal server error", "code": "internal"})
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
 
 async def zerobyte_get(path: str, params: dict | None = None) -> dict:
-    r = await http_client.get(path, params=params)
+    try:
+        r = await http_client.get(path, params=params)
+    except httpx.ConnectError:
+        raise ZerobyteError("Cannot reach Zerobyte API — connection refused")
+    except httpx.TimeoutException:
+        raise ZerobyteError("Zerobyte API request timed out")
+
+    if r.status_code == 401:
+        raise ZerobyteAuthError("Invalid or expired API token", status_code=401)
+    if r.status_code == 404:
+        raise ZerobyteNotFoundError(f"Resource not found: {path}", status_code=404)
+    if r.status_code == 429:
+        raise ZerobyteError("Rate limited by Zerobyte API — try again later", status_code=429)
+    if r.status_code >= 500:
+        raise ZerobyteServerError(
+            f"Zerobyte API error ({r.status_code}): {r.text[:200]}", status_code=r.status_code
+        )
+
     r.raise_for_status()
     return r.json()
 
 
 async def zerobyte_post(path: str) -> dict:
-    r = await http_client.post(path)
+    try:
+        r = await http_client.post(path)
+    except httpx.ConnectError:
+        raise ZerobyteError("Cannot reach Zerobyte API — connection refused")
+    except httpx.TimeoutException:
+        raise ZerobyteError("Zerobyte API request timed out")
+
+    if r.status_code == 401:
+        raise ZerobyteAuthError("Invalid or expired API token", status_code=401)
+    if r.status_code == 404:
+        raise ZerobyteNotFoundError(f"Resource not found: {path}", status_code=404)
+    if r.status_code == 429:
+        raise ZerobyteError("Rate limited by Zerobyte API — try again later", status_code=429)
+    if r.status_code >= 500:
+        raise ZerobyteServerError(
+            f"Zerobyte API error ({r.status_code}): {r.text[:200]}", status_code=r.status_code
+        )
+
     r.raise_for_status()
     return r.json()
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 RESOURCE_ENDPOINTS = {
     "repo": "repositories",
@@ -43,7 +166,25 @@ RESOURCE_LIST_FIELDS = {
 }
 
 
+def keep(d: dict, keys: set) -> dict:
+    return {k: v for k, v in d.items() if k in keys}
+
+
+def deep_omit(d: dict, keys: set) -> dict:
+    return {
+        k: deep_omit(v, keys) if isinstance(v, dict) else v
+        for k, v in d.items()
+        if k not in keys
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+
 @mcp.tool()
+@handle_errors
 async def list_resources(kind: Literal["repo", "volume", "backup"]) -> str:
     """List all resources of a given kind configured in Zerobyte.
 
@@ -55,6 +196,7 @@ async def list_resources(kind: Literal["repo", "volume", "backup"]) -> str:
 
 
 @mcp.tool()
+@handle_errors
 async def get_resource(kind: Literal["repo", "volume", "backup"], resource_id: str) -> str:
     """Get informations for a specific Zerobyte resource.
 
@@ -62,28 +204,33 @@ async def get_resource(kind: Literal["repo", "volume", "backup"], resource_id: s
         kind: The kind of resource to get - 'repo', 'volume', or 'backup'
         resource_id: The resource short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(resource_id)
     data = await zerobyte_get(f"/api/v1/{RESOURCE_ENDPOINTS[kind]}/{resource_id}")
     return json.dumps(deep_omit(data, {"config"}))
 
 
 @mcp.tool()
+@handle_errors
 async def get_backup_progress(backup_id: str) -> str:
     """Get the progress of a specific Zerobyte backup.
 
     Args:
     backup_id: The backup short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(backup_id, "backup_id")
     data = await zerobyte_get(f"/api/v1/backups/{backup_id}/progress")
     return json.dumps(data)
 
 
 @mcp.tool()
+@handle_errors
 async def get_backup_mirrors(backup_id: str) -> str:
     """Get the mirrors of a specific Zerobyte backup, including their compatibility.
 
     Args:
     backup_id: The backup short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(backup_id, "backup_id")
     mirrors, compatibility = (
         await zerobyte_get(f"/api/v1/backups/{backup_id}/mirrors"),
         await zerobyte_get(f"/api/v1/backups/{backup_id}/mirrors/compatibility"),
@@ -97,17 +244,20 @@ async def get_backup_mirrors(backup_id: str) -> str:
 
 
 @mcp.tool()
+@handle_errors
 async def get_backup_notifications(backup_id: str) -> str:
     """Get the notification channels assigned to a specific Zerobyte backup.
 
     Args:
     backup_id: The backup short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(backup_id, "backup_id")
     data = await zerobyte_get(f"/api/v1/backups/{backup_id}/notifications")
     return json.dumps([deep_omit(d, {"config"}) for d in data])
 
 
 @mcp.tool()
+@handle_errors
 async def list_notification_destinations() -> str:
     """List all available notification channels configured in Zerobyte."""
     data = await zerobyte_get("/api/v1/notifications/destinations")
@@ -115,6 +265,7 @@ async def list_notification_destinations() -> str:
 
 
 @mcp.tool()
+@handle_errors
 async def get_info() -> str:
     """Get Zerobyte system runtime and capabilities info."""
     data = await zerobyte_get("/api/v1/system/info")
@@ -122,17 +273,20 @@ async def get_info() -> str:
 
 
 @mcp.tool()
+@handle_errors
 async def get_repo_stats(repo_id: str) -> str:
     """Get storage statistics for a specific Zerobyte repository.
 
     Args:
         repo_id: The repository short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(repo_id, "repo_id")
     data = await zerobyte_get(f"/api/v1/repositories/{repo_id}/stats")
     return json.dumps(data)
 
 
 @mcp.tool()
+@handle_errors
 async def get_repo_snapshots(repo_id: str, backup_id: str | None = None) -> str:
     """Get snapshots for a specific Zerobyte repository.
 
@@ -144,6 +298,9 @@ async def get_repo_snapshots(repo_id: str, backup_id: str | None = None) -> str:
         backup_id: The backup short_id as returned by list_resources (e.g. 'a1b2c3d4'),
             used to filter snapshots to a specific backup.
     """
+    validate_id(repo_id, "repo_id")
+    if backup_id is not None:
+        validate_id(backup_id, "backup_id")
     data = await zerobyte_get(
         f"/api/v1/repositories/{repo_id}/snapshots",
         params={"backupId": backup_id} if backup_id is not None else None,
@@ -152,17 +309,20 @@ async def get_repo_snapshots(repo_id: str, backup_id: str | None = None) -> str:
 
 
 @mcp.tool()
+@handle_errors
 async def refresh_repo_stats(repo_id: str) -> str:
     """Trigger a refresh of storage statistics for a specific Zerobyte repository.
 
     Args:
         repo_id: The repository short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(repo_id, "repo_id")
     data = await zerobyte_post(f"/api/v1/repositories/{repo_id}/stats/refresh")
     return json.dumps(data)
 
 
 @mcp.tool()
+@handle_errors
 async def run_repo_doctor(repo_id: str) -> str:
     """Start a doctor operation (repository check/repair) for a specific Zerobyte repository.
 
@@ -172,11 +332,13 @@ async def run_repo_doctor(repo_id: str) -> str:
     Args:
         repo_id: The repository short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(repo_id, "repo_id")
     data = await zerobyte_post(f"/api/v1/repositories/{repo_id}/doctor")
     return json.dumps(data)
 
 
 @mcp.tool()
+@handle_errors
 async def get_snapshot_files(
     repo_id: str,
     snapshot_id: str,
@@ -193,6 +355,9 @@ async def get_snapshot_files(
         offset: Pagination offset (default 0)
         limit: Max number of entries to return (default 500)
     """
+    validate_id(repo_id, "repo_id")
+    validate_id(snapshot_id, "snapshot_id")
+    validate_path(path)
     params: dict[str, str | int] = {"offset": offset, "limit": limit}
     if path is not None:
         params["path"] = path
@@ -204,6 +369,7 @@ async def get_snapshot_files(
 
 
 @mcp.tool()
+@handle_errors
 async def get_volume_files(
     volume_id: str, path: str | None = None, offset: int = 0, limit: int = 500
 ) -> str:
@@ -215,6 +381,8 @@ async def get_volume_files(
     offset: Pagination offset (default 0)
     limit: Max number of entries to return (default 500)
     """
+    validate_id(volume_id, "volume_id")
+    validate_path(path)
     params: dict[str, str | int] = {"offset": offset, "limit": limit}
     if path is not None:
         params["path"] = path
@@ -223,17 +391,20 @@ async def get_volume_files(
 
 
 @mcp.tool()
+@handle_errors
 async def get_volume_health_check(volume_id: str) -> str:
     """Run a health check for a specific Zerobyte volume.
 
     Args:
     volume_id: The volume short_id as returned by list_resources (e.g. 'a1b2c3d4')
     """
+    validate_id(volume_id, "volume_id")
     data = await zerobyte_post(f"/api/v1/volumes/{volume_id}/health-check")
     return json.dumps(data)
 
 
 @mcp.tool()
+@handle_errors
 async def browse_filesystem(
     path: str | None = None, offset: int = 0, limit: int = 500
 ) -> str:
@@ -244,23 +415,12 @@ async def browse_filesystem(
     offset: Pagination offset (default 0)
     limit: Max number of entries to return (default 500)
     """
+    validate_path(path)
     params: dict[str, str | int] = {"offset": offset, "limit": limit}
     if path is not None:
         params["path"] = path
     data = await zerobyte_get("/api/v1/volumes/filesystem/browse", params=params)
     return json.dumps(data)
-
-
-def keep(d: dict, keys: set) -> dict:
-    return {k: v for k, v in d.items() if k in keys}
-
-
-def deep_omit(d: dict, keys: set) -> dict:
-    return {
-        k: deep_omit(v, keys) if isinstance(v, dict) else v
-        for k, v in d.items()
-        if k not in keys
-    }
 
 
 if __name__ == "__main__":
