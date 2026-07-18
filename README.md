@@ -7,14 +7,14 @@ An [MCP](https://modelcontextprotocol.io) server that exposes the [Zerobyte](htt
 ### Resources
 
 | Tool | Description |
-|---|---|
+| --- | --- |
 | `list_resources` | List all repositories, volumes, or backups configured in Zerobyte |
 | `get_resource` | Get detailed information for a specific resource |
 
 ### Repositories
 
 | Tool | Description |
-|---|---|
+| --- | --- |
 | `get_repo_stats` | Get storage statistics for a repository |
 | `refresh_repo_stats` | Trigger a refresh of repository storage statistics |
 | `get_repo_snapshots` | List snapshots in a repository, optionally filtered by backup |
@@ -23,7 +23,7 @@ An [MCP](https://modelcontextprotocol.io) server that exposes the [Zerobyte](htt
 ### Backups
 
 | Tool | Description |
-|---|---|
+| --- | --- |
 | `get_backup_progress` | Get the progress of a backup job |
 | `get_backup_mirrors` | Get mirror destinations and compatibility for a backup |
 | `get_backup_notifications` | Get notification channels assigned to a backup |
@@ -31,20 +31,20 @@ An [MCP](https://modelcontextprotocol.io) server that exposes the [Zerobyte](htt
 ### Snapshots
 
 | Tool | Description |
-|---|---|
+| --- | --- |
 | `get_snapshot_files` | Browse files and directories within a snapshot |
 
 ### Volumes
 
 | Tool | Description |
-|---|---|
+| --- | --- |
 | `get_volume_files` | Browse files and directories on a volume |
 | `get_volume_health_check` | Run a health check on a volume |
 
 ### System
 
 | Tool | Description |
-|---|---|
+| --- | --- |
 | `get_info` | Get Zerobyte system runtime and capabilities |
 | `list_notification_destinations` | List all configured notification channels |
 | `browse_filesystem` | Browse the filesystem of the Zerobyte host |
@@ -73,7 +73,7 @@ ZEROBYTE_API_TOKEN=your-api-token
 ```
 
 | Variable | Required | Description |
-|---|---|---|
+| --- | --- |
 | `ZEROBYTE_URL` | Yes | Base URL of the Zerobyte API |
 | `ZEROBYTE_API_TOKEN` | Yes | API key (sent as `x-api-key` header) |
 
