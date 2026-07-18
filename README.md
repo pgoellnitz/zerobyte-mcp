@@ -57,31 +57,22 @@ A `GET /health` endpoint returns `{"status": "ok"}` when the upstream Zerobyte A
 
 Only **non-destructive** operations are implemented — read-only queries, statistics refresh triggers, health checks, and repository doctor checks. No write, delete, modify, or configuration-change operations are exposed. Sensitive `config` keys are stripped from all API responses.
 
-## Prerequisites
-
-- Python 3.12 or later
-- [uv](https://docs.astral.sh/uv/) package manager
-- A Zerobyte API URL and API token
-
 ## Configuration
 
-Create an `.env` file:
-
-```env
-ZEROBYTE_URL=https://backup.example.com
-ZEROBYTE_API_TOKEN=your-api-token
-```
+Environment variables loaded by the server:
 
 | Variable | Required | Description |
 | --- | --- |
-| `ZEROBYTE_URL` | Yes | Base URL of the Zerobyte API |
-| `ZEROBYTE_API_TOKEN` | Yes | API key (sent as `x-api-key` header) |
+| `ZEROBYTE_URL` | Yes | Base URL of the Zerobyte installation |
+| `ZEROBYTE_API_TOKEN` | Yes | Zerobyte API key |
 
 ## Running
 
-### Direct
+### Direct from source
 
 ```bash
+export ZEROBYTE_URL=http://<your-local-ip>:<port>
+export ZEROBYTE_API_TOKEN=<your-api-token>
 uv sync
 uv run python src/zerobyte_mcp/server.py
 ```
@@ -90,36 +81,33 @@ The server starts on `0.0.0.0:8000` with the streamable HTTP transport.
 
 ### Docker Compose
 
-```bash
-docker compose up -d
+```yaml
+services:
+  zerobyte-mcp:
+    image: ghcr.io/pgoellnitz/zerobyte-mcp:latest
+    ports:
+      - 8000:8000
+    restart: unless-stopped
+    environment:
+      - ZEROBYTE_URL=http://<your-local-ip>:<port>
+      - ZEROBYTE_API_TOKEN=<your-api-token>
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 ```
-
-The image is also published at `ghcr.io/{repo}/zerobyte-mcp`.
 
 ## MCP Client Setup
 
-Add to your MCP client configuration (e.g., Claude Desktop `claude_desktop_config.json`):
+Add to your LibreChat `librechat.yaml`:
 
-```json
-{
-  "mcpServers": {
-    "zerobyte": {
-      "transport": "streamable-http",
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
+```yaml
+mcpServers:
+  zerobyte:
+    type: streamable-http
+    url: http://localhost:8000/mcp
 ```
-
-## Development
-
-```bash
-uv sync --dev       # install dev dependencies
-pytest              # run tests
-ruff format         # format code
-ruff check          # lint
-```
-
----
 
 > **Disclaimer:** This project is provided **as-is** for **educational purposes only**. It should not be used on productive Zerobyte instances. No warranty or support is provided.
