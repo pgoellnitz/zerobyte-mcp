@@ -62,7 +62,7 @@ Only **non-destructive** operations are implemented — read-only queries, stati
 Environment variables loaded by the server:
 
 | Variable | Required | Description |
-| --- | --- |
+| --- | --- | --- |
 | `ZEROBYTE_URL` | Yes | Base URL of the Zerobyte installation |
 | `ZEROBYTE_API_TOKEN` | Yes | Zerobyte API key |
 
