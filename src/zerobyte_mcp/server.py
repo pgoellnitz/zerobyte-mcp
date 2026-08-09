@@ -23,6 +23,8 @@ http_client = httpx.AsyncClient(
     base_url=BASE_URL, headers={"x-api-key": TOKEN}, timeout=30.0
 )
 
+ERROR_BODY_MAX_LENGTH = 200
+
 
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[None]:
@@ -93,16 +95,16 @@ def handle_errors(func):
             logger.warning("Not found: %s", e.message)
             return json.dumps({"error": e.message, "code": "not_found"})
         except ZerobyteAuthError as e:
-            logger.error("Auth error: %s", e.message)
+            logger.error("Auth error: %s", e.message, exc_info=True)
             return json.dumps({"error": e.message, "code": "auth_error"})
         except ZerobyteServerError as e:
-            logger.error("Server error: %s", e.message)
+            logger.error("Server error (%d): %s", e.status_code, e.message, exc_info=True)
             return json.dumps({"error": e.message, "code": "server_error"})
         except ZerobyteError as e:
-            logger.error("API error: %s", e.message)
+            logger.error("API error: %s", e.message, exc_info=True)
             return json.dumps({"error": e.message, "code": "api_error"})
         except httpx.HTTPStatusError as e:
-            logger.error("Unexpected HTTP error: %s", e)
+            logger.error("Unexpected HTTP error: %s", e, exc_info=True)
             return json.dumps({"error": f"Unexpected error ({e.response.status_code})", "code": "unexpected"})
         except Exception:
             logger.exception("Unhandled error in tool")
@@ -132,7 +134,7 @@ async def zerobyte_get(path: str, params: dict | None = None) -> dict:
         raise ZerobyteError("Rate limited by Zerobyte API — try again later", status_code=429)
     if r.status_code >= 500:
         raise ZerobyteServerError(
-            f"Zerobyte API error ({r.status_code}): {r.text[:200]}", status_code=r.status_code
+            f"Zerobyte API error ({r.status_code}): {r.text[:ERROR_BODY_MAX_LENGTH]}", status_code=r.status_code
         )
 
     r.raise_for_status()
@@ -155,7 +157,7 @@ async def zerobyte_post(path: str) -> dict:
         raise ZerobyteError("Rate limited by Zerobyte API — try again later", status_code=429)
     if r.status_code >= 500:
         raise ZerobyteServerError(
-            f"Zerobyte API error ({r.status_code}): {r.text[:200]}", status_code=r.status_code
+            f"Zerobyte API error ({r.status_code}): {r.text[:ERROR_BODY_MAX_LENGTH]}", status_code=r.status_code
         )
 
     r.raise_for_status()
@@ -450,6 +452,7 @@ async def health_check(request):
         r.raise_for_status()
         return JSONResponse({"status": "ok"})
     except Exception:
+        logger.warning("Health check failed", exc_info=True)
         return JSONResponse(
             {"status": "unhealthy", "reason": "zerobyte_unreachable"},
             status_code=503,
