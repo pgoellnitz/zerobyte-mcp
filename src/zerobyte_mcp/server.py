@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import json
 import logging
@@ -19,9 +20,23 @@ logger = logging.getLogger("zerobyte_mcp")
 BASE_URL = os.environ["ZEROBYTE_URL"]
 TOKEN = os.environ["ZEROBYTE_API_TOKEN"]
 
-http_client = httpx.AsyncClient(
-    base_url=BASE_URL, headers={"x-api-key": TOKEN}, timeout=30.0
-)
+_http_client: httpx.AsyncClient | None = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            base_url=BASE_URL,
+            headers={"x-api-key": TOKEN},
+            timeout=30.0,
+            limits=httpx.Limits(
+                max_keepalive_connections=5,
+                max_connections=10,
+                keepalive_expiry=20.0,
+            ),
+        )
+    return _http_client
 
 ERROR_BODY_MAX_LENGTH = 200
 
@@ -32,7 +47,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await http_client.aclose()
+        global _http_client
+        if _http_client is not None:
+            await _http_client.aclose()
         logger.info("Shut down zerobyte-mcp server")
 
 
@@ -106,6 +123,9 @@ def handle_errors(func):
         except httpx.HTTPStatusError as e:
             logger.error("Unexpected HTTP error: %s", e, exc_info=True)
             return json.dumps({"error": f"Unexpected error ({e.response.status_code})", "code": "unexpected"})
+        except asyncio.CancelledError:
+            logger.info("Tool call cancelled by client disconnect")
+            raise
         except Exception:
             logger.exception("Unhandled error in tool")
             return json.dumps({"error": "Internal server error", "code": "internal"})
@@ -119,12 +139,18 @@ def handle_errors(func):
 
 
 async def zerobyte_get(path: str, params: dict | None = None) -> dict:
-    try:
-        r = await http_client.get(path, params=params)
-    except httpx.ConnectError:
-        raise ZerobyteError("Cannot reach Zerobyte API — connection refused")
-    except httpx.TimeoutException:
-        raise ZerobyteError("Zerobyte API request timed out")
+    for attempt in range(2):
+        try:
+            r = await get_http_client().get(path, params=params)
+            break
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.LocalProtocolError):
+            global _http_client
+            _http_client = None
+            if attempt == 1:
+                raise ZerobyteError("Cannot reach Zerobyte API — connection reset or refused")
+            logger.warning("Connection reset, retrying with fresh client")
+        except httpx.TimeoutException:
+            raise ZerobyteError("Zerobyte API request timed out")
 
     if r.status_code == 401:
         raise ZerobyteAuthError("Invalid or expired API token", status_code=401)
@@ -142,12 +168,18 @@ async def zerobyte_get(path: str, params: dict | None = None) -> dict:
 
 
 async def zerobyte_post(path: str) -> dict:
-    try:
-        r = await http_client.post(path)
-    except httpx.ConnectError:
-        raise ZerobyteError("Cannot reach Zerobyte API — connection refused")
-    except httpx.TimeoutException:
-        raise ZerobyteError("Zerobyte API request timed out")
+    for attempt in range(2):
+        try:
+            r = await get_http_client().post(path)
+            break
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.LocalProtocolError):
+            global _http_client
+            _http_client = None
+            if attempt == 1:
+                raise ZerobyteError("Cannot reach Zerobyte API — connection reset or refused")
+            logger.warning("Connection reset, retrying with fresh client")
+        except httpx.TimeoutException:
+            raise ZerobyteError("Zerobyte API request timed out")
 
     if r.status_code == 401:
         raise ZerobyteAuthError("Invalid or expired API token", status_code=401)
@@ -448,7 +480,7 @@ async def health_check(request):
     from starlette.responses import JSONResponse
 
     try:
-        r = await http_client.get("/api/v1/system/info")
+        r = await get_http_client().get("/api/v1/system/info")
         r.raise_for_status()
         return JSONResponse({"status": "ok"})
     except Exception:

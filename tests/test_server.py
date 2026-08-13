@@ -11,12 +11,12 @@ from zerobyte_mcp.server import (
     ZerobyteError,
     ZerobyteNotFoundError,
     ZerobyteServerError,
+    get_http_client,
     deep_omit,
     get_backup_progress,
     get_info,
     get_resource,
     get_volume_health_check,
-    http_client,
     keep,
     list_resources,
     validate_id,
@@ -124,7 +124,7 @@ class TestValidatePath:
 class TestZerobyteGet:
     @pytest.mark.asyncio
     async def test_success(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/test").mock(
                 return_value=httpx.Response(200, json={"result": "ok"})
             )
@@ -133,7 +133,7 @@ class TestZerobyteGet:
 
     @pytest.mark.asyncio
     async def test_404_raises_not_found(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/missing").mock(
                 return_value=httpx.Response(404, text="not found")
             )
@@ -142,7 +142,7 @@ class TestZerobyteGet:
 
     @pytest.mark.asyncio
     async def test_401_raises_auth_error(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/secret").mock(
                 return_value=httpx.Response(401, text="unauthorized")
             )
@@ -151,7 +151,7 @@ class TestZerobyteGet:
 
     @pytest.mark.asyncio
     async def test_500_raises_server_error(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/broken").mock(
                 return_value=httpx.Response(500, text="internal server error")
             )
@@ -160,7 +160,7 @@ class TestZerobyteGet:
 
     @pytest.mark.asyncio
     async def test_429_raises_rate_limit(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/busy").mock(
                 return_value=httpx.Response(429, text="too many requests")
             )
@@ -169,23 +169,23 @@ class TestZerobyteGet:
 
     @pytest.mark.asyncio
     async def test_timeout(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/slow").mock(side_effect=httpx.ReadTimeout("timeout"))
             with pytest.raises(ZerobyteError, match="timed out"):
                 await zerobyte_get("/api/v1/slow")
 
     @pytest.mark.asyncio
     async def test_connection_error(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/down").mock(side_effect=httpx.ConnectError("refused"))
-            with pytest.raises(ZerobyteError, match="connection refused"):
+            with pytest.raises(ZerobyteError, match="connection reset or refused"):
                 await zerobyte_get("/api/v1/down")
 
 
 class TestZerobytePost:
     @pytest.mark.asyncio
     async def test_success(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.post("/api/v1/action").mock(
                 return_value=httpx.Response(200, json={"started": True})
             )
@@ -194,7 +194,7 @@ class TestZerobytePost:
 
     @pytest.mark.asyncio
     async def test_404_raises_not_found(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.post("/api/v1/missing").mock(
                 return_value=httpx.Response(404, text="not found")
             )
@@ -210,7 +210,7 @@ class TestZerobytePost:
 class TestToolErrorHandling:
     @pytest.mark.asyncio
     async def test_list_resources_success(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/volumes").mock(
                 return_value=httpx.Response(
                     200,
@@ -224,7 +224,7 @@ class TestToolErrorHandling:
 
     @pytest.mark.asyncio
     async def test_tool_returns_error_json_on_404(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/backups/abcd1234/progress").mock(
                 return_value=httpx.Response(404, text="not found")
             )
@@ -240,7 +240,7 @@ class TestToolErrorHandling:
 
     @pytest.mark.asyncio
     async def test_tool_returns_error_on_timeout(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.post("/api/v1/volumes/abcd1234/health-check").mock(
                 side_effect=httpx.ReadTimeout("timeout")
             )
@@ -250,7 +250,7 @@ class TestToolErrorHandling:
 
     @pytest.mark.asyncio
     async def test_get_info_success(self):
-        with respx.mock(base_url=str(http_client.base_url)) as mock:
+        with respx.mock(base_url=str(get_http_client().base_url)) as mock:
             mock.get("/api/v1/system/info").mock(
                 return_value=httpx.Response(
                     200, json={"runtime": "server", "capabilities": {}}
