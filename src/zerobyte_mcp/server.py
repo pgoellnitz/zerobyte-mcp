@@ -85,12 +85,14 @@ class ZerobyteServerError(ZerobyteError):
 # Input validation
 # ---------------------------------------------------------------------------
 
-VALID_SHORT_ID = re.compile(r"^[a-zA-Z0-9]{4,16}$")
+# Zerobyte short IDs are base64url (crypto.randomBytes(...).toString("base64url")),
+# so "-" and "_" are valid. "/" and "." are not, which still blocks path traversal.
+VALID_SHORT_ID = re.compile(r"^[A-Za-z0-9_-]{4,16}$")
 
 
 def validate_id(value: str, name: str = "resource_id") -> None:
     if not VALID_SHORT_ID.match(value):
-        raise ZerobyteError(f"Invalid {name}: '{value}' — expected alphanumeric ID (4-16 chars)")
+        raise ZerobyteError(f"Invalid {name}: '{value}' — expected base64url ID (4-16 chars of A-Z, a-z, 0-9, '-', '_')")
 
 
 def validate_path(value: str | None) -> None:
