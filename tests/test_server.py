@@ -75,6 +75,8 @@ class TestValidateId:
         validate_id("18678xcj")
         validate_id("S5ZxHEKu")
         validate_id("abcd")  # min length
+        validate_id("ym_9Q")  # base64url: underscore
+        validate_id("ab-cd-ef")  # base64url: hyphen
 
     def test_too_short(self):
         with pytest.raises(ZerobyteError, match="Invalid"):
@@ -85,8 +87,9 @@ class TestValidateId:
             validate_id("a" * 17)
 
     def test_special_characters(self):
-        with pytest.raises(ZerobyteError, match="Invalid"):
-            validate_id("ab-cd-ef")
+        for bad in ("ab.cd", "ab/cd", "ab cd", "ab%2f", "ab+cd"):
+            with pytest.raises(ZerobyteError, match="Invalid"):
+                validate_id(bad)
 
     def test_path_traversal_in_id(self):
         with pytest.raises(ZerobyteError, match="Invalid"):
